@@ -1,9 +1,15 @@
-import OpenAI from "openai";
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+import { GoogleGenAI, Type } from "@google/genai";
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
 });
 export async function POST(request) {
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      return Response.json(
+        { error: "GEMINI_API_KEY is missing." },
+        { status: 500 }
+      );
+    }
     const { message, tone = "Natural" } = await request.json();
     if (!message || !message.trim()) {
       return Response.json(
@@ -11,72 +17,72 @@ export async function POST(request) {
         { status: 400 }
       );
     }
-    if (!process.env.OPENAI_API_KEY) {
-      return Response.json(
-        { error: "OPENAI_API_KEY is missing." },
-        { status: 500 }
-      );
-    }
-    const response = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: [
-        {
-          role: "system",
-          content:
-            "You are a helpful dating conversation assistant. Create natural, respectful replies that sound like a real person. The user will review and send the reply themselves.",
-        },
-        {
-          role: "user",
-          content: `
-Create exactly 3 different reply options.
+    const prompt = `
+You are a dating conversation assistant.
+Create exactly 3 different reply options for the message below.
 Tone: ${tone}
 Incoming message:
-${message}
+"${message.trim()}"
 Requirements:
-- Natural and conversational
-- Match the energy of the message
-- Keep each reply reasonably short
-- Avoid cheesy pickup lines
-- Do not be overly sexual
-- Do not manipulate or deceive
-- Make all 3 options noticeably different
-Return ONLY valid JSON:
-{
-  "replies": [
-    "reply 1",
-    "reply 2",
-    "reply 3"
-  ]
-}
-`,
+- Sound natural and human.
+- Match the energy of the incoming message.
+- Keep replies reasonably short.
+- Avoid cheesy pickup lines.
+- Do not sound robotic.
+- Do not be manipulative or deceptive.
+- Do not pressure the other person.
+- Do not be overly sexual.
+- Make all 3 replies noticeably different.
+`;
+    const response = await ai.models.generateContent({
+      model: "gemini-3.6-flash",
+      contents: prompt,
+      config: {
+        temperature: 0.9,
+        maxOutputTokens: 500,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            replies: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.STRING,
+              },
+            },
+          },
+          required: ["replies"],
         },
-      ],
+      },
     });
-    const text = response.output_text;
+    const text = response.text;
     if (!text) {
-      throw new Error("No response was returned by the AI.");
+      throw new Error("Gemini returned an empty response.");
     }
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      const cleaned = text
-        .replace(/```json/gi, "")
-        .replace(/```/g, "")
-        .trim();
-      data = JSON.parse(cleaned);
-    }
+    const data = JSON.parse(text);
     if (!Array.isArray(data.replies)) {
-      throw new Error("Invalid reply format returned by AI.");
+      throw new Error("Invalid response format from Gemini.");
+    }
+    const replies = data.replies
+      .filter((reply) => typeof reply === "string")
+      .map((reply) => reply.trim())
+      .filter(Boolean)
+      .slice(0, 3);
+    if (replies.length === 0) {
+      throw new Error("Gemini did not generate any replies.");
     }
     return Response.json({
-      replies: data.replies.slice(0, 3),
+      success: true,
+      replies,
     });
   } catch (error) {
     console.error("Dating Reply API Error:", error);
     return Response.json(
       {
-        error: error?.message || "Failed to generate replies.",
+        success: false,
+        error:
+          error?.message ||
+          "Failed to generate replies.",
       },
       { status: 500 }
     );
